@@ -1,0 +1,3 @@
+[submodule "KVQuant"]
+	path = KVQuant
+	url = https://github.com/SqueezeAILab/KVQuant.git
