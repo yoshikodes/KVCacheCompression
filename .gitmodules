@@ -1,3 +1,21 @@
 [submodule "KVQuant"]
 	path = KVQuant
 	url = https://github.com/SqueezeAILab/KVQuant.git
+[submodule "KIVI"]
+	path = KIVI
+	url = https://github.com/jy-yuan/KIVI
+[submodule "ZipCache"]
+	path = ZipCache
+	url = https://github.com/ThisisBillhe/ZipCache
+[submodule "SnapKV"]
+	path = SnapKV
+	url = https://github.com/FasterDecoding/SnapKV
+[submodule "RocketKV"]
+	path = RocketKV
+	url = https://github.com/NVlabs/RocketKV
+[submodule "H2O"]
+	path = H2O
+	url = https://github.com/FMInference/H2O
+[submodule "FastGen"]
+	path = FastGen
+	url = https://github.com/machilusZ/FastGen
