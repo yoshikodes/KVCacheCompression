@@ -39,12 +39,19 @@ SETTINGS = ["h2o_20", "h2o_40", "h2o_60",
 # Candidate URLs for the wide-complete table. The loader tries them in order.
 # (Branch and space-encoding variants; falls back to a local path.)
 DATA_URLS = [
-    "https://raw.githubusercontent.com/yoshikodes/KVCacheCompression/main/Perplexity%20Data/perplexity_wide_complete.csv",
-    "https://raw.githubusercontent.com/yoshikodes/KVCacheCompression/master/Perplexity%20Data/perplexity_wide_complete.csv",
+    "https://raw.githubusercontent.com/yoshikodes/KVCacheCompression/main/perplexity_data/perplexity_wide_complete.csv",
+    "https://raw.githubusercontent.com/yoshikodes/KVCacheCompression/master/perplexity_data/perplexity_wide_complete.csv",
 ]
 
-# Optional local fallback if you have the file on disk.
-LOCAL_FALLBACK = "Perplexity Data/perplexity_wide_complete.csv"
+# Local fallback candidates, tried in order. Covers running from the repo root
+# OR from inside the notebooks/ subfolder (where ../ reaches the data folder).
+LOCAL_FALLBACKS = [
+    "perplexity_data/perplexity_wide_complete.csv",
+    "../perplexity_data/perplexity_wide_complete.csv",
+    "/content/KVCacheCompression/perplexity_data/perplexity_wide_complete.csv",
+]
+# Back-compat: single-string fallback still accepted by load_data().
+LOCAL_FALLBACK = LOCAL_FALLBACKS[0]
 
 RANDOM_STATE = 42
 TEST_SIZE = 0.30
@@ -54,12 +61,16 @@ TEST_SIZE = 0.30
 # Data loading
 # ---------------------------------------------------------------------------
 
-def load_data(urls=None, local_fallback=LOCAL_FALLBACK, verbose=True) -> pd.DataFrame:
+def load_data(urls=None, local_fallback=None, verbose=True) -> pd.DataFrame:
     """
     Fetch the wide-complete perplexity table from GitHub (or a local file).
     Returns a cleaned DataFrame with columns:
         dataset, prompt_index, prompt, <6 settings>
     Cleaning: drop rows with any missing target, drop duplicate prompts.
+
+    Tries, in order: each URL in `urls` (default DATA_URLS), then each local
+    path in LOCAL_FALLBACKS (plus `local_fallback` if you pass one). The local
+    candidates cover running from the repo root OR the notebooks/ subfolder.
     """
     urls = urls or DATA_URLS
     text = None
@@ -71,21 +82,29 @@ def load_data(urls=None, local_fallback=LOCAL_FALLBACK, verbose=True) -> pd.Data
                 if verbose:
                     print(f"Loaded data from: {url}")
                 break
+            elif verbose:
+                print(f"  (HTTP {r.status_code} from {url})")
         except Exception as e:  # noqa: BLE001
             if verbose:
                 print(f"  (failed {url}: {e})")
+
     if text is not None:
         df = pd.read_csv(io.StringIO(text))
-    elif os.path.exists(local_fallback):
-        df = pd.read_csv(local_fallback)
-        if verbose:
-            print(f"Loaded data from local file: {local_fallback}")
     else:
-        raise RuntimeError(
-            "Could not load data from any GitHub URL or local fallback.\n"
-            "Edit DATA_URLS in kv_common.py or place the CSV at "
-            f"'{local_fallback}'."
-        )
+        candidates = ([local_fallback] if local_fallback else []) + LOCAL_FALLBACKS
+        found = next((p for p in candidates if p and os.path.exists(p)), None)
+        if found:
+            df = pd.read_csv(found)
+            if verbose:
+                print(f"Loaded data from local file: {found}")
+        else:
+            raise RuntimeError(
+                "Could not load data from any GitHub URL or local fallback.\n"
+                f"URLs tried: {urls}\n"
+                f"Local paths tried: {candidates}\n"
+                "Fix DATA_URLS in kv_common.py, or pass "
+                "load_data(local_fallback='<path to perplexity_wide_complete.csv>')."
+            )
 
     missing = [c for c in SETTINGS if c not in df.columns]
     if missing:
