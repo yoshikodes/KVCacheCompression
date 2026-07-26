@@ -12,7 +12,7 @@ Target model spec:
              [h2o_20, h2o_40, h2o_60, kvquant_2bit, kvquant_3bit, kvquant_4bit]
 
 Input files live in   ./Data/           (expects up to 24: 6 settings x 4 datasets)
-Output files written to ./Perplexity Data/
+Output files written to ./perplexity_data/
 
 Filename convention expected (matches the uploaded data):
     h2o_budget_<20|40|60>pct_<dataset>_per_prompt.csv
@@ -24,7 +24,7 @@ column and a `perplexity` column, plus a leading per-prompt index column named
 one of: question_index / item_index / chunk_index. This script relies only on
 those three fields, so it is robust to the schema differences.
 
-Outputs (in ./Perplexity Data/):
+Outputs (in ./perplexity_data/):
     perplexity_wide_all.csv        every prompt, all 6 setting columns (NaN where missing)
     perplexity_wide_complete.csv   only prompts that have all 6 settings present
     perplexity_long.csv            tidy long form: one row per (prompt, setting)
@@ -46,7 +46,7 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "Data"
-OUT_DIR = ROOT / "Perplexity Data"
+OUT_DIR = ROOT / "perplexity_data"
 
 # The six compression settings, in the fixed order the output vector should use.
 SETTINGS = [
@@ -63,6 +63,11 @@ DATASETS = ["gsm8k", "arc_challenge", "hellaswag", "wikitext103"]
 
 # Candidate names for the per-prompt index column across the four schemas.
 INDEX_COL_CANDIDATES = ["question_index", "item_index", "chunk_index"]
+
+# Prompts whose FULL-CACHE baseline perplexity exceeds this are treated as
+# base-model failures (the model is bad at the prompt regardless of
+# compression) and dropped from the filtered output.
+BASELINE_PPL_THRESHOLD = 500.0
 
 
 # ----------------------------------------------------------------------------
@@ -105,6 +110,50 @@ def find_index_col(df: pd.DataFrame) -> str | None:
         if c in df.columns:
             return c
     return None
+
+
+# Baseline (full-cache / full-precision, no compression) filename marker.
+BASELINE_MARKER = "baseline_full_precision"
+
+
+def load_baseline(data_dir: Path, verbose: bool = True) -> pd.DataFrame | None:
+    """
+    Load the full-cache baseline perplexity for each prompt, across datasets.
+    Returns a frame with columns: dataset, prompt, baseline_ppl  (or None if
+    no baseline files are present). Baseline files are recognized by the
+    'baseline_full_precision' marker in their filename.
+    """
+    frames = []
+    for path in sorted(data_dir.glob("*.csv")):
+        if BASELINE_MARKER not in path.name.lower():
+            continue
+        parsed_ds = None
+        for ds in sorted(DATASETS, key=len, reverse=True):
+            if ds in path.name.lower():
+                parsed_ds = ds
+                break
+        if parsed_ds is None:
+            continue
+        try:
+            b = pd.read_csv(path)
+        except Exception as e:  # noqa: BLE001
+            print(f"  ! failed to read baseline {path.name}: {e}", file=sys.stderr)
+            continue
+        if "prompt" not in b.columns or "perplexity" not in b.columns:
+            continue
+        frames.append(pd.DataFrame({
+            "dataset": parsed_ds,
+            "prompt": b["prompt"].astype(str).values,
+            "baseline_ppl": pd.to_numeric(b["perplexity"], errors="coerce").values,
+        }))
+        if verbose:
+            print(f"  + baseline: {path.name} -> {parsed_ds}")
+
+    if not frames:
+        return None
+    base = pd.concat(frames, ignore_index=True)
+    base = base.dropna(subset=["baseline_ppl"]).drop_duplicates("prompt")
+    return base
 
 
 # ----------------------------------------------------------------------------
@@ -261,6 +310,18 @@ def main() -> None:
     complete_mask = wide[SETTINGS].notna().all(axis=1)
     wide_complete = wide[complete_mask].copy()
 
+    # --- join baseline (full-cache perplexity) if present ---
+    baseline = load_baseline(DATA_DIR)
+    wide_complete_bl = None
+    if baseline is not None:
+        wide_complete_bl = wide_complete.merge(
+            baseline[["prompt", "baseline_ppl"]], on="prompt", how="left")
+        n_matched = int(wide_complete_bl["baseline_ppl"].notna().sum())
+        print(f"\nBaseline joined: {n_matched}/{len(wide_complete_bl)} prompts matched.")
+    else:
+        print("\nNo baseline files found (marker "
+              f"'{BASELINE_MARKER}'); skipping baseline outputs.")
+
     # --- write outputs ---
     p_long = OUT_DIR / "perplexity_long.csv"
     p_wide = OUT_DIR / "perplexity_wide_all.csv"
@@ -271,6 +332,27 @@ def main() -> None:
     wide.to_csv(p_wide, index=False)
     wide_complete.to_csv(p_complete, index=False)
     coverage.to_csv(p_cov, index=False)
+
+    # Baseline-augmented + filtered outputs.
+    if wide_complete_bl is not None:
+        p_bl = OUT_DIR / "perplexity_wide_complete_with_baseline.csv"
+        wide_complete_bl.to_csv(p_bl, index=False)
+
+        # Filtered: drop prompts with no baseline or baseline above threshold
+        # (these are base-model failures, not compression effects).
+        filt = wide_complete_bl[
+            wide_complete_bl["baseline_ppl"].notna()
+            & (wide_complete_bl["baseline_ppl"] <= BASELINE_PPL_THRESHOLD)
+        ].copy()
+        p_filt = OUT_DIR / "perplexity_wide_complete_filtered.csv"
+        filt.to_csv(p_filt, index=False)
+        n_removed = len(wide_complete_bl) - len(filt)
+        print(f"Filter baseline_ppl <= {BASELINE_PPL_THRESHOLD}: "
+              f"kept {len(filt)}, removed {n_removed}.")
+        print("  removed per dataset:",
+              wide_complete_bl[
+                  ~wide_complete_bl.index.isin(filt.index)
+              ]["dataset"].value_counts().to_dict())
 
     # --- summary ---
     print("\nWrote:")

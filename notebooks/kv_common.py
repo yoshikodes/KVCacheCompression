@@ -38,17 +38,28 @@ SETTINGS = ["h2o_20", "h2o_40", "h2o_60",
 
 # Candidate URLs for the wide-complete table. The loader tries them in order.
 # (Branch and space-encoding variants; falls back to a local path.)
+# Primary file: baseline-filtered complete vectors (base-model-failure prompts
+# with baseline perplexity > threshold already removed by build_perplexity_data.py).
+# Falls back to the unfiltered complete file if the filtered one isn't present.
+_FILE_CANDIDATES = [
+    "perplexity_wide_complete_filtered.csv",
+    "perplexity_wide_complete.csv",
+]
+_REPO_BASE = "https://raw.githubusercontent.com/yoshikodes/KVCacheCompression/{branch}/perplexity_data/{fname}"
+
 DATA_URLS = [
-    "https://raw.githubusercontent.com/yoshikodes/KVCacheCompression/main/perplexity_data/perplexity_wide_complete.csv",
-    "https://raw.githubusercontent.com/yoshikodes/KVCacheCompression/master/perplexity_data/perplexity_wide_complete.csv",
+    _REPO_BASE.format(branch=b, fname=f)
+    for f in _FILE_CANDIDATES for b in ("main", "master")
 ]
 
 # Local fallback candidates, tried in order. Covers running from the repo root
 # OR from inside the notebooks/ subfolder (where ../ reaches the data folder).
 LOCAL_FALLBACKS = [
-    "perplexity_data/perplexity_wide_complete.csv",
-    "../perplexity_data/perplexity_wide_complete.csv",
-    "/content/KVCacheCompression/perplexity_data/perplexity_wide_complete.csv",
+    p.format(fname=f)
+    for f in _FILE_CANDIDATES
+    for p in ("perplexity_data/{fname}",
+              "../perplexity_data/{fname}",
+              "/content/KVCacheCompression/perplexity_data/{fname}")
 ]
 # Back-compat: single-string fallback still accepted by load_data().
 LOCAL_FALLBACK = LOCAL_FALLBACKS[0]
